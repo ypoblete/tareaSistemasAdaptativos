@@ -1,0 +1,277 @@
+;; Each potential solution is represented by a turtle.
+
+turtles-own [
+  bits           ;; list of 0's and 1's
+  fitness
+  probability ;;propiedades que la tortuga almacenará queda aquí
+  rango ;;Rango que generará la tortuga para el algoritmo FPS
+]
+
+globals [
+  winner         ;; turtle that currently has the best solution
+  bitCM ;;Lista aleatoria que será el comparador para el Uniform Crossover
+  number
+  total
+]
+
+to setup
+  clear-all
+  create-turtles population-size [
+    set bits n-values world-width [one-of [0 1]]
+    calculate-fitness
+    hide-turtle  ;; the turtles' locations are not used, so hide them
+  ]
+
+  if go-FPS? ;;le da probabilidades a las tortugas en caso de correr la selección FPS
+  [
+     ask turtles [set probability fitness / sum [fitness] of turtles]
+  let prev_prob 0
+  ask turtles [set rango prev_prob + probability
+  set prev_prob rango
+  ]
+  ]
+
+  if go-Unif-Crossover? ;; Crea el vector aleatorio comparador para el caso de cruzamiento uniforme
+  [set bitCM n-values world-width [one-of [0 1]]] ;;list that has the information for the uniform crossover
+
+  update-display
+    reset-ticks
+end
+
+to go
+  if [fitness] of winner = world-width
+    [ stop ]
+  create-next-generation
+
+  if go-FPS? ;;Si corre la selección FPS le va dando probabilidades a las tortugas en las distintas iteraciones
+  [
+  ask turtles [set probability fitness / sum [fitness] of turtles
+  ]
+  let prev_prob 0
+  ask turtles [set rango prev_prob + probability
+    set prev_prob rango
+    ]
+  ]
+
+  update-display
+  tick
+end
+
+to update-display
+  set winner max-one-of turtles [fitness]
+  ask patches [
+    ifelse item pxcor ([bits] of winner) = 1
+      [ set pcolor white ]
+      [ set pcolor black ]
+  ]
+end
+
+;; ===== Generating Solutions
+
+;; Each solution has its "fitness score" calculated.
+;; Higher scores mean "more fit", and lower scores mean "less fit".
+;; The higher a fitness score, the more likely that this solution
+;;   will be chosen to reproduce and create offspring solutions
+;;   in the next generation.
+;;
+to calculate-fitness       ;; turtle procedure
+  ;; For the "ALL-ONES" problem, the fitness is simply equal to the number of ones
+  ;; that occur in this solution's bits.
+  ;; However, you could solve more interesting problems by changing this procedure
+  ;; to evaluate the bits in other ways.  For instance, the bits might
+  ;; encode rules for how a turtle should move across the world in a search for food.
+  set fitness length (remove 0 bits)
+end
+
+;; This procedure does the main work of the genetic algorithm.
+;; We start with the old generation of solutions.
+;; We choose solutions with good fitness to produce offspring
+;; through crossover (sexual recombination), and to be cloned
+;; (asexual reproduction) into the next generation.
+;; There is also a chance of mutation occurring in each individual.
+;; After a full new generation of solutions has been created,
+;; the old generation dies.
+to create-next-generation
+  ; The following line of code looks a bit odd, so we'll explain it.
+  ; if we simply wrote "LET OLD-GENERATION TURTLES",
+  ; then OLD-GENERATION would mean the set of all turtles, and when
+  ; new solutions were created, they would be added to the breed, and
+  ; OLD-GENERATION would also grow.  Since we don't want it to grow,
+  ; we instead write "TURTLES WITH [TRUE]", which makes OLD-GENERATION
+  ; an agentset, which doesn't get updated when new solutions are created.
+  let old-generation turtles with [true]
+
+  ; Some number of the population is created by crossover each generation
+  ; we divide by 2 because each time through the loop we create two children.
+  let crossover-count  (floor (population-size * crossover-rate / 100 / 2))
+
+  repeat crossover-count
+  [
+
+    let parent1 []
+    let parent2 []
+
+    ;;Se usa la selección FPS
+    if-else go-FPS?
+    [
+    let random1 random-float 1
+    let random2 random-float 1
+
+    let selected1 0
+
+
+    foreach sort turtles [
+      ask turtles [
+          if random1 < rango [set selected1 who]
+    ]
+    ]
+
+    set parent1 turtle selected1
+
+    let selected2 0
+
+    foreach sort turtles [
+      ask turtles [
+      if random2 < rango [set selected2 who]
+    ]
+    ]
+
+    set parent2 turtle selected2
+    ]
+    
+    ;;Si no se activa FPS entonces ocurre por torneo
+
+    [
+     ; We use "tournament selection", with tournament size = 3.
+    ; This means, we randomly pick 3 solutions from the previous generation
+    ; and select the best one of those 3 to reproduce.
+    set parent1 max-one-of (n-of 3 old-generation) [fitness]
+    set parent2 max-one-of (n-of 3 old-generation) [fitness]
+    ]
+
+    let child-bits crossover ([bits] of parent1) ([bits] of parent2)
+
+    ; create the two children, with their new genetic material
+    ask parent1 [ hatch 1 [ set bits item 0 child-bits ] ]
+    ask parent2 [ hatch 1 [ set bits item 1 child-bits ] ]
+  ]
+
+  ; the remainder of the population is created by cloning
+  ; selected members of the previous generation
+  repeat (population-size - crossover-count * 2)
+  [
+    ask max-one-of (n-of 3 old-generation) [fitness]
+      [ hatch 1 ]
+  ]
+
+  ask old-generation [ die ]
+
+  ; now we're just talking to the new generation of solutions here
+  ask turtles
+  [
+    ; there's a chance of mutations occurring
+    mutate
+    ; finally we update the fitness value for this solution
+    calculate-fitness
+  ]
+end
+
+;; ===== Mutations
+
+;; This reporter performs one-point crossover on two lists of bits.
+;; That is, it chooses a random location for a splitting point.
+;; Then it reports two new lists, using that splitting point,
+;; by combining the first part of bits1 with the second part of bits2
+;; and the first part of bits2 with the second part of bits1;
+;; it puts together the first part of one list with the second part of
+;; the other.
+to-report crossover [bits1 bits2]
+
+  ;;Cruzamiento uniforme si se activa
+  if-else go-Unif-Crossover?
+  [
+  let son1 []
+  let son2 []
+  let counter 0
+  foreach bitCM
+  [
+    ifelse item counter bitCM = 0
+    [set son1 (lput (item counter bits1) son1)]
+    [set son1 (lput (item counter bits2) son1)]
+    set counter (counter + 1)
+  ]
+
+  set counter 0
+
+  foreach bitCM
+  [
+      ifelse item counter bitCM = 0
+    [set son2 (lput (item counter bits1) son2)]
+      [set son2 (lput (item counter bits2) son2)]
+    set counter (counter + 1)
+  ]
+
+  report list son1 son2
+  ]
+
+  ;;En caso que no se active cruzamiento uniforme se hace por k-puntos
+  [
+    let split-point 1 + random (length bits1 - 1)
+  report list (sentence (sublist bits1 0 split-point)
+                        (sublist bits2 split-point length bits2))
+              (sentence (sublist bits2 0 split-point)
+                        (sublist bits1 split-point length bits1))
+  ]
+
+end
+
+;; This procedure causes random mutations to occur in a solution's bits.
+;; The probability that each bit will be flipped is controlled by the
+;; MUTATION-RATE slider.
+to mutate   ;; turtle procedure
+  set bits map [ b ->
+    ifelse-value random-float 100.0 < mutation-rate
+      [ 1 - b ]
+      [ b ]
+  ] bits
+end
+
+;; ===== Diversity Measures
+
+;; Our diversity measure is the mean of all-pairs Hamming distances between
+;; the genomes in the population.
+to-report diversity
+  let distances []
+  ask turtles [
+    let bits1 bits
+    ask turtles with [self > myself] [
+      set distances fput (hamming-distance bits bits1) distances
+    ]
+  ]
+  ; The following  formula calculates how much 'disagreement' between genomes
+  ; there could possibly be, for the current population size.
+  ; This formula may not be immediately obvious, so here's a sketch of where
+  ; it comes from.  Imagine a population of N turtles, where N is even, and each
+  ; turtle has  only a single bit (0 or 1).  The most diverse this population
+  ; can be is if half the turtles have 0 and half have 1 (you can prove this
+  ; using calculus!). In this case, there are (N / 2) * (N / 2) pairs of bits
+  ; that differ.  Showing that essentially the same formula (rounded down by
+  ; the floor function) works when N is odd, is left as an exercise to the reader.
+  let max-possible-distance-sum floor (count turtles * count turtles / 4)
+
+  ; Now, using that number, we can normalize our diversity measure to be
+  ; between 0 (completely homogeneous population) and 1 (maximally heterogeneous)
+  report (sum distances) / max-possible-distance-sum
+end
+
+;; The Hamming distance between two bit sequences is the fraction
+;; of positions at which the two sequences have different values.
+;; We use MAP to run down the lists comparing for equality, then
+;; we use LENGTH and REMOVE to count the number of inequalities.
+to-report hamming-distance [bits1 bits2]
+  report (length remove true (map [ [b1 b2] -> b1 = b2 ] bits1 bits2)) / world-width
+end
+
+
+; Copyright 2008 Uri Wilensky.
+; See Info tab for full copyright and license.
